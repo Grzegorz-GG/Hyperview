@@ -1,0 +1,34 @@
+defaults:
+  - data: default
+  - model: convnext_small
+  - training: default
+  - _self_
+
+# model.in_channels is always derived from PCA — do not override this manually
+model:
+  in_channels: ${data.pca_components}
+
+wandb:
+  enabled: true
+  project: "hyperview_challenge"
+  # Run name shown in W&B UI — auto-built from config via Hydra interpolation.
+  # Override with: python train.py wandb.name="my_custom_name"
+  name: "${model.backbone_name}_pca${data.pca_components}"
+  notes: ""          # free-text description of what this run tests
+  tags: []           # e.g. ["frozen_backbone", "pca10"]
+  group: null        # group related runs, e.g. "ablation_pca"
+  # API key — leave empty here; set via env var or Colab Secrets (see colab_runner.ipynb)
+  api_key: null
+
+paths:
+  train_data:      "/content/train_data/train"
+  test_data:       "/content/test_data/test"
+  gt_path:         "/content/train_gt.csv"
+  wavelength_path: "/content/wavelengths.csv"
+  drive_train_tar: "/content/drive/MyDrive/train.tar.gz"
+  drive_test_tar:  "/content/drive/MyDrive/test.tar.gz"
+  output_dir:      "/content/outputs"
+  model_save:      "/content/outputs/best_model.pth"
+  scaler_x_save:   "/content/outputs/scaler_hyperspectral.pkl"
+  pca_save:        "/content/outputs/pca_hyperspectral.pkl"
+  scaler_y_save:   "/content/outputs/scaler_labels.pkl"

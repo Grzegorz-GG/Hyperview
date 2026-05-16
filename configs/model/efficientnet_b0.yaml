@@ -1,0 +1,3 @@
+backbone_name: "efficientnet_b0"
+pretrained: true
+dropout: 0.3

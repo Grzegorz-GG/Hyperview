@@ -1,0 +1,3 @@
+backbone_name: "convnext_tiny_in22k"
+pretrained: true
+dropout: 0.3

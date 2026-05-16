@@ -1,0 +1,14 @@
+epochs: 90
+warmup_epochs: 10
+patience: 13              # early stopping patience
+max_grad_norm: 1.0
+
+optimizer:
+  lr_backbone: 1e-5
+  lr_head: 1e-4
+  weight_decay: 1e-4
+
+scheduler:
+  factor: 0.3
+  patience: 6             # ReduceLROnPlateau patience
+  min_lr: 1e-6

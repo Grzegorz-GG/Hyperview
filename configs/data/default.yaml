@@ -1,0 +1,15 @@
+pca_components: 3          # also sets model.in_channels automatically
+batch_size: 32
+num_workers: 2
+pin_memory: true
+pad_size: [224, 224]
+max_pixels_for_pca: 3000000
+
+augment:
+  resized_crop_scale: [0.8, 1.0]
+  spectral_drop_prob: 0.05
+
+split:
+  test_size: 0.2
+  val_size: 0.25            # fraction of remaining after test split
+  random_state: 93
