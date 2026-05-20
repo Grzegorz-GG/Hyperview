@@ -1,3 +1,5 @@
 backbone_name: "convnext_tiny_in22k"
 pretrained: true
 dropout: 0.3
+in_channels: ${data.pca_components}   # automatically tracks pca_components
+use_spectral_reducer: false

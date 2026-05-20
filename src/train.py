@@ -66,20 +66,23 @@ def train_with_early_stopping(
             scheduler.step(val_loss)
 
         # ---- Logging ----
-        lrs = [pg["lr"] for pg in optimizer.param_groups]
+        # param group order: [reducer, backbone, head] (conv) or [backbone, head] (pca)
+        lrs      = [pg["lr"] for pg in optimizer.param_groups]
+        lr_names = (["lr_reducer", "lr_backbone", "lr_head"] if len(lrs) == 3
+                    else ["lr_backbone", "lr_head"])
+        lr_str   = "  ".join(f"{n}: {v:.2e}" for n, v in zip(lr_names, lrs))
         print(
             f"Epoch {epoch+1:3d}/{epochs}  "
-            f"Train: {train_loss:.4f}  Val: {val_loss:.4f}  "
-            f"LR backbone: {lrs[0]:.2e}  LR head: {lrs[1]:.2e}"
+            f"Train: {train_loss:.4f}  Val: {val_loss:.4f}  {lr_str}"
         )
         if wandb_run is not None:
-            wandb_run.log({
+            log_dict = {
                 "train_loss": train_loss,
                 "val_loss":   val_loss,
                 "epoch":      epoch + 1,
-                "lr_backbone": lrs[0],
-                "lr_head":     lrs[1],
-            })
+            }
+            log_dict.update(dict(zip(lr_names, lrs)))
+            wandb_run.log(log_dict)
 
         # ---- Early stopping & checkpoint ----
         if val_loss < best_val_loss:

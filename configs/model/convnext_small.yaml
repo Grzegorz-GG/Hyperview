@@ -1,4 +1,5 @@
 backbone_name: "convnext_small_in22k"
 pretrained: true
 dropout: 0.3
-# in_channels is always set to data.pca_components in config.yaml — do not add here
+in_channels: ${data.pca_components}   # automatically tracks pca_components
+use_spectral_reducer: false

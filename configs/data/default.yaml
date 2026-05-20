@@ -1,4 +1,5 @@
-pca_components: 3          # also sets model.in_channels automatically
+spectral_mode: pca          # "pca" | "conv"  — controls the spectral reduction strategy
+pca_components: 3           # used only when spectral_mode=pca; sets model.in_channels
 batch_size: 32
 num_workers: 2
 pin_memory: true

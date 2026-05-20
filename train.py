@@ -3,22 +3,34 @@ Main training entry point — managed by Hydra.
 
 Run from the project root (after cd-ing into it in Colab):
 
-    # Default config (convnext_small, pca_components=3)
+    # Default (convnext_small, PCA mode, 3 components)
     python train.py
 
-    # Change model
-    python train.py model=convnext_tiny
-
-    # Change PCA components (model.in_channels updates automatically)
+    # ── Spectral mode ────────────────────────────────────────────────────────
+    # PCA mode — change number of PCA components (in_channels auto-updates)
     python train.py data.pca_components=10
 
-    # Change model + PCA together
-    python train.py model=efficientnet_b0 data.pca_components=5
+    # Conv reducer mode (learnable 150→32→3 conv inside the model)
+    python train.py model=convnext_small_conv data.spectral_mode=conv
 
-    # Override any parameter
+    # Conv mode with more reducer output channels
+    python train.py model=convnext_small_conv data.spectral_mode=conv model.reducer_channels=10
+
+    # ── Model selection ───────────────────────────────────────────────────────
+    # PCA mode models:  convnext_tiny | convnext_small | convnext_large | efficientnet_b0
+    # Conv mode models: convnext_tiny_conv | convnext_small_conv | convnext_large_conv
+    python train.py model=convnext_large
+
+    # ── Loss function ─────────────────────────────────────────────────────────
+    python train.py training.loss=smooth_l1
+    python train.py training.loss=huber
+
+    # ── Combined overrides ────────────────────────────────────────────────────
+    python train.py model=convnext_large data.pca_components=10 training.loss=smooth_l1
+    python train.py model=convnext_tiny_conv data.spectral_mode=conv training.epochs=50
+
+    # ── Misc ──────────────────────────────────────────────────────────────────
     python train.py training.optimizer.lr_backbone=1e-4 training.epochs=50
-
-    # Disable W&B
     python train.py wandb.enabled=false
 """
 
@@ -27,6 +39,7 @@ import sys
 import joblib
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -54,14 +67,32 @@ from src.evaluate import (
 )
 
 
+def build_criterion(loss_name: str) -> nn.Module:
+    """Return the requested loss function."""
+    name = loss_name.lower()
+    if name == "mse":
+        return nn.MSELoss()
+    if name == "smooth_l1":
+        return nn.SmoothL1Loss(beta=1.0)
+    if name == "huber":
+        return nn.HuberLoss(delta=1.0)
+    raise ValueError(
+        f"Unknown loss '{loss_name}'. Choose from: mse, smooth_l1, huber"
+    )
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig) -> None:
 
     print(OmegaConf.to_yaml(cfg))
 
+    spectral_mode = cfg.data.spectral_mode   # "pca" | "conv"
+    assert spectral_mode in ("pca", "conv"), \
+        f"data.spectral_mode must be 'pca' or 'conv', got '{spectral_mode}'"
+
     # ------------------------------------------------------------------ setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    print(f"Device: {device}  |  Spectral mode: {spectral_mode}")
 
     os.makedirs(cfg.paths.output_dir, exist_ok=True)
     pad_size = tuple(cfg.data.pad_size)
@@ -85,24 +116,31 @@ def main(cfg: DictConfig) -> None:
     )
     print(f"  Train: {len(X_train)}  Val: {len(X_val)}  Test: {len(X_test)}")
 
-    # ------------------------------------------------------------------ PCA
-    print(f"\n[2/6] Fitting PCA ({cfg.data.pca_components} components) …")
-    pixels_train = collect_valid_pixels(X_train, max_pixels=cfg.data.max_pixels_for_pca)
-    print(f"  Collected {pixels_train.shape[0]:,} valid pixels")
+    # ------------------------------------------------------------------ spectral reduction
+    if spectral_mode == "pca":
+        print(f"\n[2/6] Fitting PCA ({cfg.data.pca_components} components) …")
+        pixels_train = collect_valid_pixels(X_train, max_pixels=cfg.data.max_pixels_for_pca)
+        print(f"  Collected {pixels_train.shape[0]:,} valid pixels")
 
-    scaler_x = StandardScaler()
-    pixels_scaled = scaler_x.fit_transform(pixels_train)
+        scaler_x = StandardScaler()
+        pixels_scaled = scaler_x.fit_transform(pixels_train)
 
-    pca = PCA(n_components=cfg.data.pca_components)
-    pca.fit(pixels_scaled)
-    print(f"  Explained variance: {pca.explained_variance_ratio_.sum()*100:.1f}%")
+        pca = PCA(n_components=cfg.data.pca_components)
+        pca.fit(pixels_scaled)
+        print(f"  Explained variance: {pca.explained_variance_ratio_.sum()*100:.1f}%")
 
-    joblib.dump(scaler_x, cfg.paths.scaler_x_save)
-    joblib.dump(pca,      cfg.paths.pca_save)
+        joblib.dump(scaler_x, cfg.paths.scaler_x_save)
+        joblib.dump(pca,      cfg.paths.pca_save)
 
-    X_train_pca = transform_patches_with_mask(X_train, scaler_x, pca)
-    X_val_pca   = transform_patches_with_mask(X_val,   scaler_x, pca)
-    X_test_pca  = transform_patches_with_mask(X_test,  scaler_x, pca)
+        X_train_ds = transform_patches_with_mask(X_train, scaler_x, pca)
+        X_val_ds   = transform_patches_with_mask(X_val,   scaler_x, pca)
+        X_test_ds  = transform_patches_with_mask(X_test,  scaler_x, pca)
+
+    else:  # conv mode — raw 150-band data fed directly to the model
+        print("\n[2/6] Conv reducer mode — skipping PCA, using raw 150-band data …")
+        raw_ch = X_all[0][0].shape[0]
+        print(f"  Raw spectral channels: {raw_ch}")
+        X_train_ds, X_val_ds, X_test_ds = X_train, X_val, X_test
 
     # ------------------------------------------------------------------ label scaler
     print("\n[3/6] Scaling labels …")
@@ -113,19 +151,24 @@ def main(cfg: DictConfig) -> None:
     joblib.dump(scaler_y, cfg.paths.scaler_y_save)
 
     # ------------------------------------------------------------------ global stats
-    global_means, global_stds = calculate_global_stats(X_train_pca, pad_size=pad_size)
+    global_means, global_stds = calculate_global_stats(X_train_ds, pad_size=pad_size)
+    torch.save(
+        {"means": global_means, "stds": global_stds},
+        cfg.paths.global_stats_save,
+    )
+    print(f"  Global stats saved → {cfg.paths.global_stats_save}")
 
     # ------------------------------------------------------------------ datasets / loaders
     print("\n[4/6] Building datasets …")
     aug_cfg = cfg.data.augment
 
-    train_ds = NPZDataset(X_train_pca, y_train_sc, augment=True,
+    train_ds = NPZDataset(X_train_ds, y_train_sc, augment=True,
                           size=pad_size, global_means=global_means,
                           global_stds=global_stds, aug_cfg=aug_cfg)
-    val_ds   = NPZDataset(X_val_pca,   y_val_sc,   augment=False,
+    val_ds   = NPZDataset(X_val_ds,   y_val_sc,   augment=False,
                           size=pad_size, global_means=global_means,
                           global_stds=global_stds)
-    test_ds  = NPZDataset(X_test_pca,  y_test_sc,  augment=False,
+    test_ds  = NPZDataset(X_test_ds,  y_test_sc,  augment=False,
                           size=pad_size, global_means=global_means,
                           global_stds=global_stds)
 
@@ -138,20 +181,39 @@ def main(cfg: DictConfig) -> None:
 
     # ------------------------------------------------------------------ model
     print("\n[5/6] Building model …")
+
+    # raw_in_channels matters only in conv mode (detected from the data)
+    raw_in_channels = X_all[0][0].shape[0] if spectral_mode == "conv" else 150
+
     model = HyperspectralRegressor(
-        in_channels   = cfg.model.in_channels,
-        n_outputs     = 4,
-        backbone_name = cfg.model.backbone_name,
-        pretrained    = cfg.model.pretrained,
-        dropout       = cfg.model.dropout,
+        in_channels          = cfg.model.in_channels,
+        n_outputs            = 4,
+        backbone_name        = cfg.model.backbone_name,
+        pretrained           = cfg.model.pretrained,
+        dropout              = cfg.model.dropout,
+        use_spectral_reducer = cfg.model.use_spectral_reducer,
+        raw_in_channels      = raw_in_channels,
+        reducer_mid_channels = getattr(cfg.model, "reducer_mid_channels", 32),
     ).to(device)
 
-    optimizer = optim.AdamW([
-        {"params": model.backbone.parameters(),  "lr": cfg.training.optimizer.lr_backbone},
-        {"params": model.regressor.parameters(), "lr": cfg.training.optimizer.lr_head},
-    ], weight_decay=cfg.training.optimizer.weight_decay)
+    # ---- optimizer (3 groups in conv mode, 2 in PCA mode) ----
+    opt_cfg = cfg.training.optimizer
+    if cfg.model.use_spectral_reducer:
+        param_groups = [
+            {"params": model.spectral_reducer.parameters(), "lr": opt_cfg.lr_reducer},
+            {"params": model.backbone.parameters(),         "lr": opt_cfg.lr_backbone},
+            {"params": model.regressor.parameters(),        "lr": opt_cfg.lr_head},
+        ]
+    else:
+        param_groups = [
+            {"params": model.backbone.parameters(),  "lr": opt_cfg.lr_backbone},
+            {"params": model.regressor.parameters(), "lr": opt_cfg.lr_head},
+        ]
+    optimizer = optim.AdamW(param_groups, weight_decay=opt_cfg.weight_decay)
 
-    criterion = torch.nn.MSELoss()
+    # ---- loss function ----
+    criterion = build_criterion(cfg.training.loss)
+    print(f"  Loss: {cfg.training.loss}  |  Optimizer groups: {len(param_groups)}")
 
     scheduler = ReduceLROnPlateau(
         optimizer,
@@ -174,7 +236,7 @@ def main(cfg: DictConfig) -> None:
 
         run = wandb.init(
             project = cfg.wandb.project,
-            name    = cfg.wandb.name,          # e.g. "convnext_tiny_in22k_pca10"
+            name    = cfg.wandb.name,
             notes   = cfg.wandb.notes,
             tags    = list(cfg.wandb.tags),
             group   = cfg.wandb.group or None,
@@ -205,18 +267,20 @@ def main(cfg: DictConfig) -> None:
     # DL model
     dl_preds, y_test_true, dl_mse = evaluate_dl_model(model, test_loader, scaler_y, device)
 
-    # Baseline (mean spectrum → mean label)
+    # Baseline (mean spectrum → mean label)  — always uses raw 150-band data
     filtering = SpectralCurveFiltering()
-    X_test_raw = [X_all[i][0] for i in idx_test]
+    X_test_raw      = [X_all[i][0] for i in idx_test]
     X_test_filtered = np.array([filtering(c.cpu().numpy()) for c in X_test_raw])
 
-    combined_idx = idx_train.tolist() + idx_val.tolist()
-    X_tv_raw = [X_all[i][0] for i in combined_idx]
-    X_tv_filtered = np.array([filtering(c.cpu().numpy()) for c in X_tv_raw])
-    y_tv = y_all[combined_idx]
+    combined_idx    = idx_train.tolist() + idx_val.tolist()
+    X_tv_raw        = [X_all[i][0] for i in combined_idx]
+    X_tv_filtered   = np.array([filtering(c.cpu().numpy()) for c in X_tv_raw])
+    y_tv            = y_all[combined_idx]
 
     baseline = BaselineRegressor().fit(X_tv_filtered, y_tv)
-    baseline_preds, baseline_mse = evaluate_baseline_regressor(baseline, X_test_filtered, y_test_true)
+    baseline_preds, baseline_mse = evaluate_baseline_regressor(
+        baseline, X_test_filtered, y_test_true
+    )
 
     score = calculate_and_print_results(dl_mse, baseline_mse, y_test_true, dl_preds, baseline_preds)
 

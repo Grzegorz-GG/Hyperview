@@ -2,10 +2,13 @@ epochs: 90
 warmup_epochs: 10
 patience: 13              # early stopping patience
 max_grad_norm: 1.0
+loss: mse                 # "mse" | "smooth_l1" | "huber"
+                          # smooth_l1 and huber use beta/delta=1.0
 
 optimizer:
   lr_backbone: 1e-5
   lr_head: 1e-4
+  lr_reducer: 1e-4        # learning rate for conv spectral reducer (conv mode only)
   weight_decay: 1e-4
 
 scheduler:

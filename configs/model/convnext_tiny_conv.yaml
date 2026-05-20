@@ -1,0 +1,9 @@
+# Conv spectral reducer mode: raw 150-band input → reducer → backbone
+# reducer_channels = backbone input channels (output of 150→32→reducer_channels conv stack)
+backbone_name: "convnext_tiny_in22k"
+pretrained: true
+dropout: 0.3
+reducer_channels: 3           # backbone sees this many channels
+reducer_mid_channels: 32      # intermediate channels: 150 → 32 → reducer_channels
+in_channels: ${model.reducer_channels}
+use_spectral_reducer: true
